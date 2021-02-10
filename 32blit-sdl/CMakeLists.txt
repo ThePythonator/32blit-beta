@@ -19,6 +19,8 @@ if(EMSCRIPTEN)
 	set(SDL2_LIBRARIES "-s USE_SDL=2")
 	set(SDL2_IMAGE_LIBRARY "-s USE_SDL_IMAGE=2")
 	set(SDL2_NET_LIBRARY "-s USE_SDL_NET=2")
+
+	set(EMSCRIPTEN_SHELL ${CMAKE_CURRENT_SOURCE_DIR}/emscripten-shell.html PARENT_SCOPE)
 else()
 	# attempt to find the framework (find_package won't work as there's no config file)
 	if(APPLE)
@@ -30,8 +32,8 @@ else()
 	endif()
 
 	# fallback guess for SDL location on Windows
-	if(WIN32 AND NOT SDL2_DIR AND 32BLIT_PATH)
-		set(SDL2_DIR "${32BLIT_PATH}/vs/sdl")
+	if(WIN32 AND NOT SDL2_DIR AND 32BLIT_DIR)
+		set(SDL2_DIR "${32BLIT_DIR}/vs/sdl")
 	endif()
 
 	if(NOT SDL2_LIBRARIES OR NOT SDL2_INCLUDE_DIRS)
@@ -93,6 +95,14 @@ else()
 		HINTS ${SDL2_DIR} ${SDL2_DIR}../../../
 		PATH_SUFFIXES bin ${VC_LIB_PATH_SUFFIX}
 	)
+
+	if(NOT SDL2_IMAGE_INCLUDE_DIR OR NOT SDL2_IMAGE_LIBRARY)
+		message(FATAL_ERROR "SDL_image not found!")
+	endif()
+
+	if(NOT SDL2_NET_INCLUDE_DIR OR NOT SDL2_NET_LIBRARY)
+		message(FATAL_ERROR "SDL_net not found!")
+	endif()
 
 	target_include_directories(BlitHalSDL
 		PRIVATE	${SDL2_IMAGE_INCLUDE_DIR} ${SDL2_NET_INCLUDE_DIR}
@@ -174,7 +184,14 @@ function(blit_executable NAME SOURCES)
 	if(EMSCRIPTEN)
 		set_target_properties(${NAME} PROPERTIES
 			SUFFIX ".html"
-			LINK_FLAGS "-s ENVIRONMENT=web -s SDL2_IMAGE_FORMATS=['jpg']"
+			LINK_FLAGS "-s ENVIRONMENT=web -s SDL2_IMAGE_FORMATS=['jpg'] --shell-file ${EMSCRIPTEN_SHELL} -s 'EXTRA_EXPORTED_RUNTIME_METHODS=[\"addRunDependency\", \"removeRunDependency\"]'"
+			LINK_DEPENDS ${EMSCRIPTEN_SHELL}
+		)
+
+		target_link_libraries(${NAME} "-lidbfs.js") # include the persistent IndexedDB-based filesystem
+
+		install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.js ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.wasm
+			DESTINATION bin
 		)
 	endif()
 
@@ -183,6 +200,17 @@ function(blit_executable NAME SOURCES)
 		install(DIRECTORY ${SDL2_LIBRARIES} DESTINATION "bin/$<TARGET_FILE_NAME:${NAME}>.app/Contents/Frameworks")
 		install(DIRECTORY ${SDL2_IMAGE_LIBRARY} DESTINATION "bin/$<TARGET_FILE_NAME:${NAME}>.app/Contents/Frameworks")
 		install(DIRECTORY ${SDL2_NET_LIBRARY} DESTINATION "bin/$<TARGET_FILE_NAME:${NAME}>.app/Contents/Frameworks")
+	elseif(APPLE)
+		# TODO: this should be run in both cases to handle any other dependencies, but it fails on the SDL frameworks and there currently aren't any other deps...
+
+		file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/fixup.cmake
+			CONTENT "
+				include(BundleUtilities)
+				fixup_bundle(\"\${CMAKE_INSTALL_PREFIX}/bin/$<TARGET_FILE_NAME:${NAME}>.app\" \"\" \"\")
+			"
+		)
+
+		install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/fixup.cmake)
 	endif()
 endfunction()
 

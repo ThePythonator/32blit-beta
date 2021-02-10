@@ -38,11 +38,11 @@ struct {
   void draw() {
     if(!this->message.empty()) {
       screen.pen = Pen(0, 0, 0, 150);
-      screen.rectangle(Rect(0, 215, 320, 25));
+      screen.rectangle(Rect(0, screen.bounds.h - 25, screen.bounds.w, 25));
       screen.pen = Pen(255, 255, 255);
-      screen.text(this->message, minimal_font, Point(5, 220));
-      uint32_t progress_width = ((this->value * 310) / this->total);
-      screen.rectangle(Rect(5, 230, progress_width, 5));
+      screen.text(this->message, minimal_font, Point(5, screen.bounds.h - 20));
+      uint32_t progress_width = ((this->value * (screen.bounds.w - 10)) / this->total);
+      screen.rectangle(Rect(5, screen.bounds.h - 10, progress_width, 5));
     }
   }
 } progress;
@@ -54,6 +54,18 @@ public:
   bool StreamInit(CDCFourCC uCommand) override {
     return true;
   }
+};
+
+class CDCLaunchHandler final : public CDCCommandHandler {
+public:
+  StreamResult StreamData(CDCDataStream &dataStream) override;
+
+  bool StreamInit(CDCFourCC uCommand) override {
+    return true;
+  }
+private:
+  char path[MAX_FILENAME];
+  int path_off = 0;
 };
 
 class FlashLoader : public CDCCommandHandler
