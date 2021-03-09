@@ -15,11 +15,16 @@ extern USBH_HandleTypeDef hUsbHostHS;
 using namespace blit;
 
 namespace multiplayer {
+  bool enabled = false;
+  bool peer_connected = false;
+
+  static void send_handshake(bool is_reply = false);
+
   class CDCUserHandler : public CDCCommandHandler
   {
   public:
     StreamResult StreamData(CDCDataStream &dataStream) override {
-  
+
       // get length and allocate buf
       if(!buf) {
         if(!dataStream.Get(length))
@@ -36,7 +41,7 @@ namespace multiplayer {
 
       // done, send to user
       if(read == length) {
-        if(api.message_received)
+        if(api.message_received && enabled)
           api.message_received(buf, length);
 
         delete[] buf;
@@ -58,19 +63,43 @@ namespace multiplayer {
     uint8_t *buf = nullptr;
   };
 
-  CDCUserHandler cdc_user_handler;
+  // this is also a disconnect/disable
+  class CDCHandshakeHandler : public CDCCommandHandler {
+  public:
+    StreamResult StreamData(CDCDataStream &dataStream) override {
 
-  bool enabled = false;
+      uint8_t val;
+      dataStream.Get(val);
+
+      peer_connected = val != 0;
+
+      // reply if we're not the host
+      if(val == 1 && !USB_GetMode(USB_OTG_HS))
+        send_handshake(true);
+
+      return srFinish;
+    }
+
+    bool StreamInit(CDCFourCC uCommand) override {
+      return true;
+    }
+  };
+
+  CDCUserHandler cdc_user_handler;
+  CDCHandshakeHandler cdc_handshake_handler;
+
+  static uint32_t last_handshake_attempt = 0;
 
   void init() {
     g_commandStream.AddCommandHandler(CDCCommandHandler::CDCFourCCMake<'U', 'S', 'E', 'R'>::value, &cdc_user_handler);
+    g_commandStream.AddCommandHandler(CDCCommandHandler::CDCFourCCMake<'M', 'L', 'T', 'I'>::value, &cdc_handshake_handler);
   }
 
   void cdc_send(const uint8_t *data, uint16_t length) {
     if(USB_GetMode(USB_OTG_HS)) { // host
       if(hUsbHostHS.gState != HOST_CLASS)
         return;
-  
+
       // FIXME: should this be using the transmit callback and have a queue somewhere?
       USBH_CDC_Transmit(&hUsbHostHS, (uint8_t *)data, length);
 
@@ -85,8 +114,20 @@ namespace multiplayer {
     }
   }
 
+  static void send_handshake(bool is_reply) {
+    uint8_t val = 0;
+    if(enabled)
+      val = is_reply ? 2 : 1;
+
+    uint8_t buf[]{'3', '2', 'B', 'L', 'M', 'L', 'T','I', val};
+    cdc_send(buf, 9);
+  }
+
   bool is_connected() {
-    // this really only means that something is connected, might not be another blit...
+    return enabled && peer_connected;
+  }
+
+  bool is_usb_connected() {
     if(USB_GetMode(USB_OTG_HS))
       return hUsbHostHS.gState == HOST_CLASS;
     else
@@ -94,6 +135,12 @@ namespace multiplayer {
   }
 
   void set_enabled(bool enabled) {
+
+    multiplayer::enabled = enabled;
+
+    // disconnect
+    if(!enabled)
+      send_handshake();
 
     // if in device mode, disable/enable VBUS sensing
     // TODO: this will fail if we switch to host and back
@@ -119,15 +166,28 @@ namespace multiplayer {
 
       USBx_DEVICE->DCTL &= ~USB_OTG_DCTL_SDIS;
     }
-
-    multiplayer::enabled = enabled;
   }
 
   void send_message(const uint8_t *data, uint16_t length) {
+    if(!peer_connected)
+      return;
+
     // header
     cdc_send((uint8_t *)"32BLUSER", 8);
     cdc_send((uint8_t *)&length, 2);
 
     cdc_send((uint8_t *)data, length);
+  }
+
+  void update() {
+    // reset peer_connected if the USB was disconnected
+    if(peer_connected && !is_usb_connected())
+      peer_connected = false;
+
+    // attempt handshake if we're the host
+    if(!peer_connected && USB_GetMode(USB_OTG_HS) && HAL_GetTick() - last_handshake_attempt > 1000) {
+      send_handshake();
+      last_handshake_attempt = HAL_GetTick();
+    }
   }
 }

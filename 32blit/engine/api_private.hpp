@@ -7,6 +7,7 @@
 #include "file.hpp"
 #include "../audio/audio.hpp"
 #include "../engine/input.hpp"
+#include "../engine/version.hpp"
 #include "../graphics/jpeg.hpp"
 #include "../graphics/surface.hpp"
 #include "../types/vec2.hpp"
@@ -16,11 +17,12 @@ namespace blit {
 
   using AllocateCallback = uint8_t *(*)(size_t);
 
-  constexpr uint32_t api_version = 0;
+  constexpr uint16_t api_version_major = 0, api_version_minor = 0;
 
   #pragma pack(push, 4)
   struct API {
-    uint32_t version = api_version;
+    uint16_t version_major;
+    uint16_t version_minor;
 
     ButtonState buttons;
     float hack_left;
@@ -80,6 +82,8 @@ namespace blit {
 
     const uint8_t *(*flash_to_tmp)(const std::string &filename, uint32_t &size);
     void (*tmp_file_closed)(const uint8_t *ptr);
+
+    GameMetadata (*get_metadata)();
   };
   #pragma pack(pop)
 

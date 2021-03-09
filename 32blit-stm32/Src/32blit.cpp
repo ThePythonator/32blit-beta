@@ -61,9 +61,9 @@ const float volume_log_base = 2.0f;
 
 const uint32_t long_press_exit_time = 1000;
 
-static uint32_t last_input_time = 0;
+static uint32_t last_input_time = 0, sleep_fade_in_start = 0;
 static float sleep_fade = 1.0f;
-const int sleep_inactivity_time = 30000; // ms before sleeping
+const int sleep_inactivity_time = 120000; // ms before sleeping
 const int sleep_fade_out_time = 3000, sleep_fade_in_time = 500;
 
 __attribute__((section(".persist"))) Persist persist;
@@ -76,6 +76,7 @@ static void (*user_render)(uint32_t time) = nullptr;
 static bool user_code_disabled = false;
 
 void blit_update_volume();
+static void update_active();
 
 void DFUBoot(void)
 {
@@ -153,6 +154,29 @@ static const char *get_launch_path() {
   return persist.launch_path;
 }
 
+static GameMetadata get_metadata() {
+  GameMetadata ret;
+
+  auto meta = blit_get_running_game_metadata();
+  if(meta) {
+    ret.title = meta->title;
+    ret.author = meta->author;
+    ret.description = meta->description;
+    ret.version = meta->version;
+
+    if(memcmp(meta + 1, "BLITTYPE", 8) == 0) {
+      auto type_meta = reinterpret_cast<RawTypeMetadata *>(reinterpret_cast<char *>(meta) + sizeof(*meta) + 8);
+      ret.url = type_meta->url;
+      ret.category = type_meta->category;
+    } else {
+      ret.url = "";
+      ret.category = "none";
+    }
+  }
+
+  return ret;
+}
+
 static void do_render() {
   if(display::needs_render) {
     blit::render(blit::now());
@@ -183,6 +207,8 @@ void blit_tick() {
   blit_update_led();
   blit_update_vibration();
 
+  multiplayer::update();
+
   // SD card inserted/removed
   if(blit_sd_detected() != fs_mounted) {
     if(!fs_mounted)
@@ -197,7 +223,7 @@ void blit_tick() {
     sleep_fade = std::max(0.0f, 1.0f - float(HAL_GetTick() - last_input_time - sleep_inactivity_time) / sleep_fade_out_time);
     blit_update_volume();
   } else if(sleep_fade < 1.0f) {
-    sleep_fade = std::min(1.0f, float(HAL_GetTick() - last_input_time) / sleep_fade_in_time);
+    sleep_fade = std::min(1.0f, float(HAL_GetTick() - sleep_fade_in_start) / sleep_fade_in_time);
     blit_update_volume();
   }
 
@@ -317,6 +343,10 @@ void blit_init() {
     blit_init_accelerometer();
 
     bq24295_init(&hi2c4);
+
+    blit::api.version_major = api_version_major;
+    blit::api.version_minor = api_version_minor;
+
     blit::api.debug = blit_debug;
     blit::api.now = HAL_GetTick;
     blit::api.random = HAL_GetRandom;
@@ -354,6 +384,8 @@ void blit_init() {
     blit::api.is_multiplayer_connected = multiplayer::is_connected;
     blit::api.set_multiplayer_enabled = multiplayer::set_enabled;
     blit::api.send_message = multiplayer::send_message;
+
+    blit::api.get_metadata = ::get_metadata;
 
   display::init();
 
@@ -593,7 +625,7 @@ void blit_process_input() {
     (!HAL_GPIO_ReadPin(JOYSTICK_BUTTON_GPIO_Port, JOYSTICK_BUTTON_Pin) ? blit::JOYSTICK   : 0);
 
   if(blit::buttons.state)
-    last_input_time = HAL_GetTick();
+    update_active();
 
   // Process ADC readings
   int joystick_x = (adc1data[0] >> 1) - 16384;
@@ -619,9 +651,9 @@ void blit_process_input() {
     joystick_y = 0;
   }
   blit::joystick.y = -joystick_y / 7168.0f;
-  
+
   if(blit::joystick.length() > 0.01f)
-    last_input_time = HAL_GetTick();
+    update_active();
 
   blit::hack_left = (adc3data[0] >> 1) / 32768.0f;
   blit::hack_right = (adc3data[1] >> 1)  / 32768.0f;
@@ -637,7 +669,7 @@ void blit_process_input() {
 typedef  void (*pFunction)(void);
 pFunction JumpToApplication;
 
-void blit_switch_execution(uint32_t address, bool force_game)
+bool blit_switch_execution(uint32_t address, bool force_game)
 {
   if(blit_user_code_running() && !force_game)
     persist.reset_target = prtFirmware;
@@ -661,6 +693,7 @@ void blit_switch_execution(uint32_t address, bool force_game)
     // TODO: may be possible to return to the menu without a hard reset but currently flashing doesn't work
     SCB_CleanDCache();
     NVIC_SystemReset();
+    return true; // can't get here
   }
 
 	// switch to user app in external flash
@@ -682,20 +715,21 @@ void blit_switch_execution(uint32_t address, bool force_game)
       if(!init(address)) {
         user_render = nullptr;
         user_tick = nullptr;
-        // this would just be a return, but qspi is already mapped by this point
+        // don't try to auto-launch this game again
         persist.reset_target = prtFirmware;
-        SCB_CleanDCache();
-        NVIC_SystemReset();
-        return;
+
+        qspi_disable_memorymapped_mode();
+
+        return false;
       }
 
       blit::render = user_render;
       do_tick = user_tick;
-      return;
+      return true;
     }
     // anything flashed at a non-zero offset should have a valid header
     else if(address != 0)
-      return;
+      return false;
   }
 
   // old-style soft-reset to app with linked HAL
@@ -746,6 +780,8 @@ void blit_switch_execution(uint32_t address, bool force_game)
 	while(1)
 	{
 	}
+
+  return true;
 }
 
 bool blit_user_code_running() {
@@ -798,4 +834,12 @@ RawMetadata *blit_get_running_game_metadata() {
   }
 
   return nullptr;
+}
+
+static void update_active() {
+  // fading out or done fading, fade back in
+  if(HAL_GetTick() - last_input_time > sleep_inactivity_time)
+    sleep_fade_in_start = HAL_GetTick() - sleep_fade * sleep_fade_in_time;
+
+  last_input_time = HAL_GetTick();
 }

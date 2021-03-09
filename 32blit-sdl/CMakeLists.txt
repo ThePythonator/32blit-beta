@@ -42,10 +42,10 @@ else()
 
 	# If SDL2 was built using CMake, the generated configuration files define SDL2::* targets instead of the SDL2_* variables
 	if(TARGET SDL2::SDL2)
-		set(SDL2_LIBRARIES SDL2::SDL2 SDL2::SDL2main)
+		set(SDL2_LIBRARIES SDL2::SDL2main SDL2::SDL2)
 	# handle SDL2 built with only a static library
 	elseif(TARGET SDL2::SDL2-static)
-		set(SDL2_LIBRARIES SDL2::SDL2-static SDL2::SDL2main)
+		set(SDL2_LIBRARIES SDL2::SDL2main SDL2::SDL2-static)
 	else()
 		target_include_directories(BlitHalSDL
 			PRIVATE	${SDL2_INCLUDE_DIRS}
@@ -55,7 +55,7 @@ else()
 	# find SDL2_image
 	# TODO: may need to be more complicated
 	find_path(SDL2_IMAGE_INCLUDE_DIR SDL_image.h
-		HINTS ${SDL2_DIR} ${SDL2_DIR}../../../
+		HINTS ${SDL2_DIR} ${SDL2_DIR}/../../../
 		PATH_SUFFIXES SDL2 include/SDL2 include
 	)
 
@@ -68,31 +68,31 @@ else()
 
 	find_library(SDL2_IMAGE_LIBRARY
 		NAMES SDL2_image
-		HINTS ${SDL2_DIR} ${SDL2_DIR}../../../
+		HINTS ${SDL2_DIR} ${SDL2_DIR}/../../../
 		PATH_SUFFIXES lib ${VC_LIB_PATH_SUFFIX}
 	)
 
 	# dlls
 	find_file(SDL2_IMAGE_DLL SDL2_image.dll
-		HINTS ${SDL2_DIR} ${SDL2_DIR}../../../
+		HINTS ${SDL2_DIR} ${SDL2_DIR}/../../../
 		PATH_SUFFIXES bin ${VC_LIB_PATH_SUFFIX}
 	)
 
 	#SDL_net
 	find_path(SDL2_NET_INCLUDE_DIR SDL_net.h
-		HINTS ${SDL2_DIR} ${SDL2_DIR}../../../
+		HINTS ${SDL2_DIR} ${SDL2_DIR}/../../../
 		PATH_SUFFIXES SDL2 include/SDL2 include
 	)
 
 	find_library(SDL2_NET_LIBRARY
 		NAMES SDL2_net
-		HINTS ${SDL2_DIR} ${SDL2_DIR}../../../
+		HINTS ${SDL2_DIR} ${SDL2_DIR}/../../../
 		PATH_SUFFIXES lib ${VC_LIB_PATH_SUFFIX}
 	)
 
 	# dlls
 	find_file(SDL2_NET_DLL SDL2_net.dll
-		HINTS ${SDL2_DIR} ${SDL2_DIR}../../../
+		HINTS ${SDL2_DIR} ${SDL2_DIR}/../../../
 		PATH_SUFFIXES bin ${VC_LIB_PATH_SUFFIX}
 	)
 
@@ -252,13 +252,17 @@ function(blit_metadata TARGET FILE)
 		set_source_files_properties(${ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 	endif()
 
-	file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/_metadata.cpp
-		CONTENT "
-const char *metadata_title = \"${METADATA_TITLE}\";
-const char *metadata_author = \"${METADATA_AUTHOR}\";
-const char *metadata_description = \"${METADATA_DESCRIPTION}\";
-const char *metadata_version = \"${METADATA_VERSION}\";
-		"
+	string(CONFIGURE "
+const char *metadata_title = \"\${METADATA_TITLE}\";
+const char *metadata_author = \"\${METADATA_AUTHOR}\";
+const char *metadata_description = \"\${METADATA_DESCRIPTION}\";
+const char *metadata_version = \"\${METADATA_VERSION}\";
+const char *metadata_url = \"\${METADATA_URL}\";
+const char *metadata_category = \"\${METADATA_CATEGORY}\";"
+		METADATA_CONTENT ESCAPE_QUOTES
 	)
+
+	file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/_metadata.cpp CONTENT "${METADATA_CONTENT}")
+
 	target_sources(${TARGET} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/_metadata.cpp)
 endfunction()
